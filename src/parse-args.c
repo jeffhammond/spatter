@@ -25,6 +25,7 @@ extern char platform_string[STRING_SIZE];
 extern char device_string[STRING_SIZE];
 extern char kernel_file[STRING_SIZE];
 extern char kernel_name[STRING_SIZE];
+extern char index_file[STRING_SIZE];
 
 extern size_t source_len;
 extern size_t target_len;
@@ -78,6 +79,7 @@ void parse_args(int argc, char **argv)
     safestrcopy(device_string,   "NONE");
     safestrcopy(kernel_file,     "NONE");
     safestrcopy(kernel_name,     "NONE");
+    safestrcopy(index_file,      "NONE");
 
     size_t generic_len = 0;
     size_t sparsity = 1;
@@ -93,6 +95,7 @@ void parse_args(int argc, char **argv)
         {"cl-device",       required_argument, NULL, 'd'},
         {"kernel-file",     required_argument, NULL, 'f'},
         {"kernel-name",     required_argument, NULL, 'k'},
+        {"index-file",      required_argument, NULL, 'x'},
         {"source-len",      required_argument, NULL, SOURCE},
         {"target-len",      required_argument, NULL, TARGET},
         {"index-len",       required_argument, NULL, INDEX},
@@ -120,7 +123,7 @@ void parse_args(int argc, char **argv)
 
     while(c != -1){
 
-    	c = getopt_long_only (argc, argv, "W:l:k:s:qv:R:p:d:f:b:z:m:yw:",
+    	c = getopt_long_only (argc, argv, "W:l:k:s:qv:R:p:d:f:b:z:m:yw:x:",
                          long_options, &option_index);
 
         switch(c){
@@ -157,6 +160,9 @@ void parse_args(int argc, char **argv)
             case 'f':
                 safestrcopy(kernel_file, optarg);
                 break;
+            case 'x':
+                safestrcopy(index_file, optarg);
+		break;
             case 'k':
                 safestrcopy(kernel_name, optarg);
                 if (!strcasecmp("SG", optarg)) {

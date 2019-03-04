@@ -4,6 +4,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
 //#include "ocl-kernel-gen.h"
 #include "parse-args.h"
 #include "sgtype.h"
@@ -35,6 +40,23 @@ char platform_string[STRING_SIZE];
 char device_string[STRING_SIZE];
 char kernel_file[STRING_SIZE];
 char kernel_name[STRING_SIZE];
+char index_file[STRING_SIZE];
+
+#define SPECIAL_ADDRESS (1l<<60)
+#define NDX_CFG_GATHER  (0)
+#define NDX_CFG_SCATTER (1)
+
+typedef struct st_ndx_hdr {
+  long  n_mem_regions;
+  long  n_gs_entries;
+  long *mem_region_sz;
+} ndx_hdr_t;
+
+typedef struct st_ndx_cfg {
+  long mem_region;
+  long n_gs_elems;
+  long gs_type;
+} ndx_cfg_t;
 
 size_t source_len;
 size_t target_len;
@@ -276,12 +298,88 @@ int main(int argc, char **argv)
     //linear_indices(si.host_ptr, si.len, worksets, source.len / si.len, random_flag);
     //linear_indices(ti.host_ptr, ti.len, worksets, target.len / ti.len, random_flag);
 
-    if (wrap > 1) {
-        wrap_indices(si.host_ptr, si.len, worksets, si.stride, wrap);
-        wrap_indices(ti.host_ptr, ti.len, worksets, ti.stride, wrap);
+    if (!strcasecmp(index_file, "NONE")) {
+        /* No index file, use generated indicies */
+        if (wrap > 1) {
+            wrap_indices(si.host_ptr, si.len, worksets, si.stride, wrap);
+	    wrap_indices(ti.host_ptr, ti.len, worksets, ti.stride, wrap);
+	} else {
+	   linear_indices(si.host_ptr, si.len, worksets, si.stride, random_flag);
+	   linear_indices(ti.host_ptr, ti.len, worksets, ti.stride, random_flag);
+	}
     } else {
-        linear_indices(si.host_ptr, si.len, worksets, si.stride, random_flag);
-        linear_indices(ti.host_ptr, ti.len, worksets, ti.stride, random_flag);
+        /* !!av: Stub: pre-fill with original junk */
+        if (wrap > 1) {
+            wrap_indices(si.host_ptr, si.len, worksets, si.stride, wrap);
+	    wrap_indices(ti.host_ptr, ti.len, worksets, ti.stride, wrap);
+	} else {
+	   linear_indices(si.host_ptr, si.len, worksets, si.stride, random_flag);
+	   linear_indices(ti.host_ptr, ti.len, worksets, ti.stride, random_flag);
+	}
+        /* Use the user provided index file */
+        printf("Loading indicies from user provided file: \"%s\".\n",index_file);
+        int fd = open(index_file, O_RDONLY);
+        if( fd < 0 ) {
+	    printf("Error: Failed to open user index file.\n");
+	    exit(1);
+	}
+	struct stat buf;
+	if( fstat(fd, &buf) ) {
+	    printf("Error: Failed to stat user index file.\n");
+	    exit(1);	
+	}
+	printf("Opened index file with size: %lu bytes.\n", buf.st_size); 
+	void *bytes;
+	if( buf.st_size ) {
+	    bytes = mmap(NULL, buf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	}
+	if( !bytes ) {
+	    printf("Error: Failed to stat user index file.\n");
+	    exit(1);
+	}
+	/* Now that user file is open and mapped, decode to index buffer */
+	// Read the header.
+	long *flongs = ((long*)(bytes));
+	ndx_hdr_t ndx_hdr;
+	ndx_hdr.n_mem_regions = flongs[0];
+	if( !(ndx_hdr.mem_region_sz = malloc(ndx_hdr.n_mem_regions*sizeof(long))) ) {
+	    printf("Error: Failed to allocate index file header.\n");
+	    exit(1);
+	}
+	for(long i=0; i<ndx_hdr.n_mem_regions; i++) {
+	  ndx_hdr.mem_region_sz[i] = flongs[i+1];
+	}
+	ndx_hdr.n_gs_entries = flongs[ndx_hdr.n_mem_regions+1];
+	printf("Index file contains: %ld G/S entries.\n", ndx_hdr.n_gs_entries);
+	printf("Index file contains: %ld memory regions.\n", ndx_hdr.n_mem_regions);
+	for(long i=0; i<ndx_hdr.n_mem_regions; i++) {
+	  printf("   %ld: %ld bytes\n", i, ndx_hdr.mem_region_sz[i]);
+	}
+	// Start reading G/S entries and config entries.
+	long *cflong = ((long*)(bytes)) + ndx_hdr.n_mem_regions + 2;
+	ndx_cfg_t ndx_cfg;
+	for(long e=0; e<ndx_hdr.n_gs_entries; e++) {
+	  if( cflong >= ((long*)(bytes+buf.st_size)) ) {
+	    printf("Truncated input index file (%ld/%ld entries)!\n",e,ndx_hdr.n_gs_entries);
+	    break;
+	  }
+	  if( cflong[0] == SPECIAL_ADDRESS ) {
+	    // Entry is a config entry, read into current config.
+	    ndx_cfg.mem_region = cflong[1];
+	    ndx_cfg.n_gs_elems = cflong[2];
+	    ndx_cfg.gs_type    = cflong[3];
+	    cflong += 4;
+	    printf("New config: %ld %ld %ld\n",ndx_cfg.mem_region,ndx_cfg.n_gs_elems,ndx_cfg.gs_type);
+	  } else {
+	    // Entry is a G/S entry, read in the elements.
+	    for(long i=0; i<ndx_cfg.n_gs_elems; i++) {
+	    }
+	    cflong += ndx_cfg.n_gs_elems;
+	  }
+	}
+	/* Done with user file */
+	munmap(bytes, buf.st_size);
+	close(fd);
     }
 
     /*
