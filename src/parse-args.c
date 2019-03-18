@@ -5,6 +5,7 @@
 #include <strings.h>
 #include <string.h>
 #include <time.h>
+#include <assert.h>
 #include "parse-args.h"
 #include "backend-support-tests.h"
 
@@ -12,12 +13,16 @@
 #include "cuda-backend.h"
 #endif
 
-#define SOURCE     1000
-#define TARGET     1001 
-#define INDEX      1002
-#define BLOCK      1003
-#define SEED       1004
-#define VALIDATE   1005
+#define SOURCE      1000
+#define TARGET      1001 
+#define INDEX       1002
+#define BLOCK       1003
+#define SEED        1004
+#define VALIDATE    1005
+#define MS1_PATTERN 1006
+#define MS1_GAP     1007
+#define MS1_RUN     1008
+#define CONFIG_FILE 1009
 
 #define INTERACTIVE "INTERACTIVE"
 
@@ -25,7 +30,7 @@ extern char platform_string[STRING_SIZE];
 extern char device_string[STRING_SIZE];
 extern char kernel_file[STRING_SIZE];
 extern char kernel_name[STRING_SIZE];
-extern char index_file[STRING_SIZE];
+extern char config_file[STRING_SIZE];
 
 extern size_t source_len;
 extern size_t target_len;
@@ -38,6 +43,10 @@ extern size_t R;
 extern size_t N;
 extern size_t local_work_size;
 extern size_t workers;
+extern size_t ms1_gap;
+extern size_t ms1_run;
+extern int ms1_flag;
+extern int config_flag;
 extern int json_flag;
 extern int validate_flag;
 extern int print_header_flag;
@@ -111,6 +120,10 @@ void parse_args(int argc, char **argv)
         {"sparsity",        required_argument, NULL, 's'},
         {"local-work-size", required_argument, NULL, 'z'},
         {"shared-mem",      required_argument, NULL, 'm'},
+        {"ms1-pattern",     no_argument,       NULL, MS1_PATTERN},
+        {"ms1-gap",         required_argument, NULL, MS1_GAP},
+        {"ms1-run",         required_argument, NULL, MS1_RUN},
+        {"config-file",     required_argument, NULL, CONFIG_FILE},
         {"supress-errors",  no_argument,       NULL, 'q'},
         {"random",          no_argument,       NULL, 'y'},
         {"validate",        no_argument, &validate_flag, 1},
@@ -236,6 +249,19 @@ void parse_args(int argc, char **argv)
             case 'q':
                 err_file = fopen("/dev/null", "w");
                 break;
+            case MS1_PATTERN:
+                ms1_flag = 1;
+                break;
+            case MS1_RUN:
+                sscanf(optarg, "%zu", &ms1_run);
+                break;
+            case MS1_GAP:
+                sscanf(optarg, "%zu", &ms1_gap);
+                break;
+            case CONFIG_FILE:
+                safestrcopy(config_file, optarg);
+                config_flag = 1;
+                break;
             default:
                 break;
 
@@ -305,7 +331,17 @@ void parse_args(int argc, char **argv)
     }
 
     //Check buffer lengths
-    if (generic_len <= 0){
+    if (generic_len && ms1_flag) {
+        if (kernel == SCATTER) {
+            source_len = generic_len;
+            target_len = (generic_len / ms1_run) * (ms1_run + ms1_gap);
+            index_len = generic_len;
+        } else if (kernel == GATHER) {
+            target_len = generic_len;
+            source_len = (generic_len / ms1_run) * (ms1_run + ms1_gap);
+            index_len = generic_len;
+        }
+    } else if (generic_len <= 0){
 
         if (source_len <= 0 && target_len <= 0 && index_len <= 0) {
             error ("Please specifiy at least one of : src_len, target_len, idx_len", 1);
@@ -355,6 +391,11 @@ void parse_args(int argc, char **argv)
     if (workers < 1){
         error("Too few workers. Changing to 1.", 0);
         workers = 1;
+    }
+    
+    if(ms1_flag) {
+        assert(ms1_run > 0);
+        assert(ms1_gap > 0);
     }
 
     /* Seed rand */

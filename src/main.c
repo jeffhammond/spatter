@@ -14,6 +14,7 @@
 #include "sgtype.h"
 #include "sgbuf.h"
 #include "sgtime.h"
+#include "trace-util.h"
 
 #if defined( USE_OPENCL )
 	#include "../opencl/ocl-backend.h"
@@ -40,23 +41,7 @@ char platform_string[STRING_SIZE];
 char device_string[STRING_SIZE];
 char kernel_file[STRING_SIZE];
 char kernel_name[STRING_SIZE];
-char index_file[STRING_SIZE];
-
-#define SPECIAL_ADDRESS (1l<<60)
-#define NDX_CFG_GATHER  (0)
-#define NDX_CFG_SCATTER (1)
-
-typedef struct st_ndx_hdr {
-  long  n_mem_regions;
-  long  n_gs_entries;
-  long *mem_region_sz;
-} ndx_hdr_t;
-
-typedef struct st_ndx_cfg {
-  long mem_region;
-  long n_gs_elems;
-  long gs_type;
-} ndx_cfg_t;
+char config_file[STRING_SIZE];
 
 size_t source_len;
 size_t target_len;
@@ -69,14 +54,18 @@ size_t N = 100;
 size_t workers = 1;
 size_t vector_len = 1;
 size_t local_work_size = 1;
+size_t ms1_gap = 0; 
+size_t ms1_run = 0;
 
 unsigned int shmem = 0;
 int random_flag = 0;
+int ms1_flag = 0;
+int config_flag = 0;
 
 int json_flag = 0, validate_flag = 0, print_header_flag = 1;
 
 void print_header(){
-    printf("backend kernel op time source_size target_size idx_size worksets bytes_moved usable_bandwidth omp_threads vector_len block_dim\n");
+    printf("backend kernel op time source_size target_size idx_size bytes_moved usable_bandwidth omp_threads vector_len block_dim\n");
 }
 
 void make_upper (char* s) {
@@ -101,7 +90,7 @@ void *sg_safe_cpu_alloc (size_t size) {
 
 /** Time reported in seconds, sizes reported in bytes, bandwidth reported in mib/s"
  */
-void report_time(double time, size_t source_size, size_t target_size, size_t index_size, size_t worksets, size_t vector_len){
+void report_time(double time, size_t source_size, size_t target_size, size_t index_size,  size_t vector_len){
     if(backend == OPENMP) printf("OPENMP ");
     if(backend == OPENCL) printf("OPENCL ");
     if(backend == CUDA) printf("CUDA ");
@@ -114,7 +103,6 @@ void report_time(double time, size_t source_size, size_t target_size, size_t ind
     if(op == OP_ACCUM) printf("ACCUM ");
 
     printf("%lf %zu %zu %zu ", time, source_size, target_size, index_size);
-    printf("%zu ", worksets);
 
     size_t bytes_moved = 2 * index_len * sizeof(sgData_t);
     double usable_bandwidth = bytes_moved / time / 1024. / 1024.;
@@ -152,6 +140,7 @@ int main(int argc, char **argv)
     sgDataBuf  target;
     sgIndexBuf si; //source_index
     sgIndexBuf ti; //target_index
+    struct trace tr;
 
     size_t cpu_cache_size = 30720 * 1000; 
     size_t cpu_flush_size = cpu_cache_size * 8;
@@ -159,18 +148,17 @@ int main(int argc, char **argv)
 	cl_ulong device_cache_size = 0;
     	cl_uint work_dim = 1;
     #endif
-    size_t device_flush_size = 0;
-    size_t worksets = 1;
     size_t global_work_size = 1;
-    size_t current_ws;
-    long os, ot, oi;
     
     char *kernel_string;
 
     /* Parse command line arguments */
     parse_args(argc, argv);
 
-
+    if (config_flag) {
+        read_trace(&tr, config_file);
+        reweight_trace(tr);
+    };
 
     /* =======================================
 	Initalization
@@ -200,25 +188,9 @@ int main(int argc, char **argv)
     si.len     = index_len;
     ti.len     = index_len;
 
-    /* TBD - cache flushing
-    // Determine how many worksets we will need to flush the cache
-    if (backend == OPENMP) {
-        worksets = cpu_flush_size / 
-            ((source.len + target.len) * sizeof(sgData_t) 
-            + (si.len + ti.len) * sizeof(cl_ulong)) + 1;
-    }
-    else if (backend == OPENCL) {
-        clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_CACHE_SIZE, 
-                sizeof(device_cache_size), &device_cache_size, NULL); 
-        device_flush_size = device_cache_size * 8;
-        worksets = device_flush_size / 
-            ((source.len + target.len) * sizeof(sgData_t) 
-            + (si.len + ti.len) * sizeof(cl_ulong)) + 1;
-    }*/
-
     /* These are the total size of the data allocated for each buffer */
-    source.size = worksets * source.len * sizeof(sgData_t);
-    target.size = worksets * target.len * sizeof(sgData_t);
+    source.size = source.len * sizeof(sgData_t);
+    target.size = target.len * sizeof(sgData_t);
 
     si.stride = source.len / si.len;
     ti.stride = target.len / ti.len;
@@ -245,17 +217,8 @@ int main(int argc, char **argv)
         }
     }
 
-    /*
-    #ifdef USE_OPENCL
-       si.size     = worksets * si.len * sizeof(sgIdx_t);
-       ti.size     = worksets * ti.len * sizeof(sgIdx_t);
-    #else
-       si.size     = worksets * si.len * sizeof(sgIdx_t);
-       ti.size     = worksets * ti.len * sizeof(sgIdx_t);
-    #endif
-    */
-   si.size     = worksets * si.len * sizeof(sgIdx_t);
-   ti.size     = worksets * ti.len * sizeof(sgIdx_t);
+   si.size     = si.len * sizeof(sgIdx_t);
+   ti.size     = ti.len * sizeof(sgIdx_t);
 
     /* This is the number of sgData_t's in a workset */
     //TODO: remove since this is obviously useless
@@ -274,9 +237,6 @@ int main(int argc, char **argv)
     }
     #endif
 
-    /* Create buffers on host */
-    source.host_ptr = (sgData_t*) sg_safe_cpu_alloc(source.size); 
-    target.host_ptr = (sgData_t*) sg_safe_cpu_alloc(target.size); 
 
     /*
 #ifdef USE_CUDA
@@ -293,94 +253,45 @@ int main(int argc, char **argv)
     si.host_ptr = (sgIdx_t*) sg_safe_cpu_alloc(si.size); 
     ti.host_ptr = (sgIdx_t*) sg_safe_cpu_alloc(ti.size); 
 
-    /* Populate buffers on host */
-    random_data(source.host_ptr, source.len * worksets);
-    //linear_indices(si.host_ptr, si.len, worksets, source.len / si.len, random_flag);
-    //linear_indices(ti.host_ptr, ti.len, worksets, target.len / ti.len, random_flag);
-
-    if (!strcasecmp(index_file, "NONE")) {
-        /* No index file, use generated indicies */
-        if (wrap > 1) {
-            wrap_indices(si.host_ptr, si.len, worksets, si.stride, wrap);
-	    wrap_indices(ti.host_ptr, ti.len, worksets, ti.stride, wrap);
-	} else {
-	   linear_indices(si.host_ptr, si.len, worksets, si.stride, random_flag);
-	   linear_indices(ti.host_ptr, ti.len, worksets, ti.stride, random_flag);
-	}
+    if (ms1_flag) {
+        if (kernel == SCATTER) {
+            linear_indices(si.host_ptr, si.len, 1, 1, 0);
+            ms1_indices(ti.host_ptr, ti.len, 1, ms1_run, ms1_gap);
+        }else if (kernel == GATHER) {
+            ms1_indices(si.host_ptr, si.len, 1, ms1_run, ms1_gap);
+            linear_indices(ti.host_ptr, ti.len, 1, 1, 0);
+        } else {
+            printf("MS1 pattern is only supported for scatter and gather\n");
+            exit(1);
+        }
     } else {
-        /* !!av: Stub: pre-fill with original junk */
         if (wrap > 1) {
-            wrap_indices(si.host_ptr, si.len, worksets, si.stride, wrap);
-	    wrap_indices(ti.host_ptr, ti.len, worksets, ti.stride, wrap);
-	} else {
-	   linear_indices(si.host_ptr, si.len, worksets, si.stride, random_flag);
-	   linear_indices(ti.host_ptr, ti.len, worksets, ti.stride, random_flag);
-	}
-        /* Use the user provided index file */
-        printf("Loading indicies from user provided file: \"%s\".\n",index_file);
-        int fd = open(index_file, O_RDONLY);
-        if( fd < 0 ) {
-	    printf("Error: Failed to open user index file.\n");
-	    exit(1);
-	}
-	struct stat buf;
-	if( fstat(fd, &buf) ) {
-	    printf("Error: Failed to stat user index file.\n");
-	    exit(1);	
-	}
-	printf("Opened index file with size: %lu bytes.\n", buf.st_size); 
-	void *bytes;
-	if( buf.st_size ) {
-	    bytes = mmap(NULL, buf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-	}
-	if( !bytes ) {
-	    printf("Error: Failed to stat user index file.\n");
-	    exit(1);
-	}
-	/* Now that user file is open and mapped, decode to index buffer */
-	// Read the header.
-	long *flongs = ((long*)(bytes));
-	ndx_hdr_t ndx_hdr;
-	ndx_hdr.n_mem_regions = flongs[0];
-	if( !(ndx_hdr.mem_region_sz = malloc(ndx_hdr.n_mem_regions*sizeof(long))) ) {
-	    printf("Error: Failed to allocate index file header.\n");
-	    exit(1);
-	}
-	for(long i=0; i<ndx_hdr.n_mem_regions; i++) {
-	  ndx_hdr.mem_region_sz[i] = flongs[i+1];
-	}
-	ndx_hdr.n_gs_entries = flongs[ndx_hdr.n_mem_regions+1];
-	printf("Index file contains: %ld G/S entries.\n", ndx_hdr.n_gs_entries);
-	printf("Index file contains: %ld memory regions.\n", ndx_hdr.n_mem_regions);
-	for(long i=0; i<ndx_hdr.n_mem_regions; i++) {
-	  printf("   %ld: %ld bytes\n", i, ndx_hdr.mem_region_sz[i]);
-	}
-	// Start reading G/S entries and config entries.
-	long *cflong = ((long*)(bytes)) + ndx_hdr.n_mem_regions + 2;
-	ndx_cfg_t ndx_cfg;
-	for(long e=0; e<ndx_hdr.n_gs_entries; e++) {
-	  if( cflong >= ((long*)(bytes+buf.st_size)) ) {
-	    printf("Truncated input index file (%ld/%ld entries)!\n",e,ndx_hdr.n_gs_entries);
-	    break;
-	  }
-	  if( cflong[0] == SPECIAL_ADDRESS ) {
-	    // Entry is a config entry, read into current config.
-	    ndx_cfg.mem_region = cflong[1];
-	    ndx_cfg.n_gs_elems = cflong[2];
-	    ndx_cfg.gs_type    = cflong[3];
-	    cflong += 4;
-	    printf("New config: %ld %ld %ld\n",ndx_cfg.mem_region,ndx_cfg.n_gs_elems,ndx_cfg.gs_type);
-	  } else {
-	    // Entry is a G/S entry, read in the elements.
-	    for(long i=0; i<ndx_cfg.n_gs_elems; i++) {
-	    }
-	    cflong += ndx_cfg.n_gs_elems;
-	  }
-	}
-	/* Done with user file */
-	munmap(bytes, buf.st_size);
-	close(fd);
+            wrap_indices(si.host_ptr, si.len, 1, si.stride, wrap);
+            wrap_indices(ti.host_ptr, ti.len, 1, ti.stride, wrap);
+        } else {
+            linear_indices(si.host_ptr, si.len, 1, si.stride, random_flag);
+            linear_indices(ti.host_ptr, ti.len, 1, ti.stride, random_flag);
+        }
     }
+
+    if (config_flag) {
+        if (kernel == SCATTER) {
+            size_t reqd_len = trace_indices(ti.host_ptr, ti.len, tr);
+            target.len = reqd_len;
+            target.size = target.len * sizeof(sgData_t);
+        } else if (kernel == GATHER) {
+            size_t reqd_len = trace_indices(si.host_ptr, si.len, tr);
+            source.len = reqd_len;
+            source.size = source.len * sizeof(sgData_t);
+        } else {
+            printf("Error: pattern files only support scatter and gather kernels\n");
+        }
+    }
+    /* Create buffers on host */
+    source.host_ptr = (sgData_t*) sg_safe_cpu_alloc(source.size); 
+    target.host_ptr = (sgData_t*) sg_safe_cpu_alloc(target.size); 
+    /* Populate buffers on host */
+    random_data(source.host_ptr, source.len);
 
     /*
     for(size_t kk = 0; kk < si.len; kk++){
@@ -420,25 +331,17 @@ int main(int argc, char **argv)
     #ifdef USE_OPENCL
     if (backend == OPENCL) {
 
-        current_ws = worksets-1;
-        os = 0; 
-        ot = 0; 
-        oi = 0;
-
         global_work_size = si.len / vector_len;
         assert(global_work_size > 0);
         cl_ulong start = 0, end = 0; 
         for (int i = 0; i <= R; i++) {
              
             start = 0; end = 0;
-            ot = current_ws * target.len;
-            os = current_ws * source.len;
-            oi = current_ws * si.len;
 
            cl_event e = 0; 
 
-            SET_7_KERNEL_ARGS(sgp, target.dev_ptr_opencl, source.dev_ptr_opencl,
-                    ti.dev_ptr_opencl, si.dev_ptr_opencl, ot, os, oi);
+            SET_4_KERNEL_ARGS(sgp, target.dev_ptr_opencl, source.dev_ptr_opencl,
+                    ti.dev_ptr_opencl, si.dev_ptr_opencl);
 
             CALL_CL_GUARDED(clEnqueueNDRangeKernel, (queue, sgp, work_dim, NULL, 
                        &global_work_size, &local_work_size, 
@@ -452,9 +355,8 @@ int main(int argc, char **argv)
 
             cl_ulong time_ns = end - start;
             double time_s = time_ns / 1000000000.;
-            if (i!=0) report_time(time_s, source.size, target.size, si.size, worksets, vector_len);
+            if (i!=0) report_time(time_s, source.size, target.size, si.size, vector_len);
 
-            current_ws = posmod(current_ws-1, worksets);
 
         }
 
@@ -465,32 +367,22 @@ int main(int argc, char **argv)
     #ifdef USE_CUDA
     if (backend == CUDA) {
 
-        current_ws = worksets-1;
-        os = 0; 
-        ot = 0; 
-        oi = 0;
-
         global_work_size = si.len / vector_len;
         long start = 0, end = 0; 
         for (int i = 0; i <= R; i++) {
              
             start = 0; end = 0;
-            ot = current_ws * target.len;
-            os = current_ws * source.len;
-            oi = current_ws * si.len;
 #define arr_len (1) 
             unsigned int grid[arr_len]  = {global_work_size/local_work_size};
             unsigned int block[arr_len] = {local_work_size};
             
             float time_ms = cuda_sg_wrapper(kernel, block_len, vector_len, 
                     arr_len, grid, block, target.dev_ptr_cuda, source.dev_ptr_cuda, 
-                   ti.dev_ptr_cuda, si.dev_ptr_cuda, ot, os, oi, shmem); 
+                   ti.dev_ptr_cuda, si.dev_ptr_cuda, shmem); 
             cudaDeviceSynchronize();
 
             double time_s = time_ms / 1000.;
-            if (i!=0) report_time(time_s, source.size, target.size, si.size, worksets, vector_len);
-
-            current_ws = posmod(current_ws-1, worksets);
+            if (i!=0) report_time(time_s, source.size, target.size, si.size, vector_len);
 
         }
 
@@ -503,13 +395,9 @@ int main(int argc, char **argv)
     #ifdef USE_OPENMP
     if (backend == OPENMP) {
 
-        current_ws = worksets-1;
-        //omp_set_num_threads(workers);
         for (int i = 0; i <= R; i++) {
 
-            ot = current_ws * target.len;
-            os = current_ws * source.len;
-            oi = current_ws * si.len;
+
 
             sg_zero_time();
 
@@ -517,26 +405,26 @@ int main(int argc, char **argv)
                 case SG:
                     if (op == OP_COPY) 
                         sg_omp (target.host_ptr, ti.host_ptr, source.host_ptr, si.host_ptr, 
-                        index_len, ot, os, oi, block_len);
+                        index_len);
                     else 
                         sg_accum_omp (target.host_ptr, ti.host_ptr, source.host_ptr, si.host_ptr, 
-                        index_len, ot, os, oi, block_len);
+                        index_len);
                     break;
                 case SCATTER:
                     if (op == OP_COPY)
 				scatter_omp (target.host_ptr, ti.host_ptr, source.host_ptr, si.host_ptr, 
-	                        index_len, ot, os, oi, block_len);
+	                        index_len);
                     else
                         scatter_accum_omp (target.host_ptr, ti.host_ptr, source.host_ptr, si.host_ptr, 
-                        index_len, ot, os, oi, block_len);
+                        index_len);
                     break;
                 case GATHER:
                     if (op == OP_COPY)
 				gather_omp (target.host_ptr, ti.host_ptr, source.host_ptr, si.host_ptr, 
-	                        index_len, ot, os, oi, block_len);
+	                        index_len);
                     else
                         gather_accum_omp (target.host_ptr, ti.host_ptr, source.host_ptr, si.host_ptr, 
-                        index_len, ot, os, oi, block_len);
+                        index_len);
                     break;
                 default:
                     printf("Error: Unable to determine kernel\n");
@@ -544,8 +432,7 @@ int main(int argc, char **argv)
             }
 
             double time_ms = sg_get_time_ms();
-            if (i!=0) report_time(time_ms/1000., source.size, target.size, si.size, worksets, vector_len);
-            current_ws = posmod(current_ws-1, worksets);
+            if (i!=0) report_time(time_ms/1000., source.size, target.size, si.size, vector_len);
 
         }
     }
