@@ -125,7 +125,7 @@ void parse_args(int argc, char **argv)
 
     while(c != -1){
 
-    	c = getopt_long_only (argc, argv, "W:l:k:s:qv:R:p:d:f:b:z:m:yw:",
+    	c = getopt_long_only (argc, argv, "W:l:k:s:qv:R:p:d:f:b:z:m:yw:t:",
                          long_options, &option_index);
 
         switch(c){
