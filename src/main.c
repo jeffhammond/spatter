@@ -452,15 +452,17 @@ int main(int argc, char **argv)
 
     /* Time OpenMP Kernel */
     #ifdef USE_OPENMP
+    double time_ms = 0.0;
     if (backend == OPENMP) {
-
+      #pragma omp parallel
+      {
         for (int i = 0; i <= R; i++) {
-
-
-
+            #pragma omp barrier
+            #pragma omp master
             sg_zero_time();
-	    
+    
 	    #ifdef USE_PAPI
+            #pragma omp master
 	    PAPI_start_counters(papi.events, papi.num);
 	    #endif
 
@@ -500,14 +502,39 @@ int main(int argc, char **argv)
                     break;
             }
 
-            double time_ms = sg_get_time_ms();
-	    if (i!=0) report_time(time_ms/1000., source.size, target.size, si.size, vector_len);
+	    #pragma omp barrier
+	    #pragma omp master
+	    {
+	      time_ms = sg_get_time_ms();
+	    }
             
 	    #ifdef USE_PAPI
-	    	PAPI_read_counters(papi.counters, papi.num);
-	    	dump_papi_to_file(&papi,papiFile);
+                #pragma omp single
+                {
+                  for(int c=0; c<papi.num; c++) {
+                    papi.counters[c] = 0;
+       	          }
+                }
+                #pragma omp barrier
+	    	#pragma omp master
+                PAPI_read_counters(counters, papi.num);
+                #pragma omp master //critical
+		{
+		  for(int c=0; c<papi.num; c++) {
+		    papi.counters[c] += counters[c];
+		  }
+		}
 	    #endif
+
+	    #pragma omp master
+	    {
+              if (i!=0) report_time(time_ms/1000., source.size, target.size, si.size, vector_len);
+              #ifdef USE_PAPI
+                dump_papi_to_file(&papi,papiFile);
+              #endif
+	    }
         }
+      } // omp parallel
     }
     #endif // USE_OPENMP
     
