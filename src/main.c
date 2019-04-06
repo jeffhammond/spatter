@@ -143,7 +143,6 @@ unsigned long ul_omp_get_thread_num()
 }
 
 void adjust_locality(size_t *a, size_t len, size_t run, double locality) {
-    print_sizet(a, len);
     for (size_t i = 1; i < len / run; i++) {
         double r = rand() / ((double)RAND_MAX);
         printf("rand: %lf\n", r);
@@ -155,8 +154,6 @@ void adjust_locality(size_t *a, size_t len, size_t run, double locality) {
             
         }
     }
-    
-    print_sizet(a, len);
 }
 
 int main(int argc, char **argv)
