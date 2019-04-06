@@ -42,6 +42,7 @@ extern size_t local_work_size;
 extern size_t workers;
 extern size_t ms1_gap;
 extern size_t ms1_run;
+extern size_t locality;
 extern int ms1_flag;
 extern int config_flag;
 extern int json_flag;
@@ -108,6 +109,7 @@ void parse_args(int argc, char **argv)
         {"op",              required_argument, NULL, 'o'},
         {"uniform-stride",  required_argument, NULL, 's'},
         {"local-work-size", required_argument, NULL, 'z'},
+        {"locality",        required_argument, NULL, 'L'},
         {"shared-mem",      required_argument, NULL, 'm'},
         {"ms1-pattern",     no_argument,       NULL, MS1_PATTERN},
         {"ms1-gap",         required_argument, NULL, MS1_GAP},
@@ -125,7 +127,7 @@ void parse_args(int argc, char **argv)
 
     while(c != -1){
 
-    	c = getopt_long_only (argc, argv, "W:l:k:s:qv:R:p:d:f:b:z:m:yw:",
+    	c = getopt_long_only (argc, argv, "W:l:k:s:qv:R:p:d:f:b:z:m:yw:t:L:",
                          long_options, &option_index);
 
         switch(c){
@@ -224,6 +226,9 @@ void parse_args(int argc, char **argv)
                 break;
             case 'z':
                 sscanf(optarg,"%zu", &local_work_size);
+                break;
+            case 'L':
+                sscanf(optarg,"%lf", &locality);
                 break;
             case 'y':
                 random_flag = 1;

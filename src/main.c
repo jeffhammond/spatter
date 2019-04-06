@@ -57,6 +57,7 @@ size_t vector_len = 1;
 size_t local_work_size = 1;
 size_t ms1_gap = 0; 
 size_t ms1_run = 0;
+double locality = 0;
 
 unsigned int shmem = 0;
 int random_flag = 0;
@@ -139,6 +140,23 @@ void print_sizet(size_t *buf, size_t len){
 unsigned long ul_omp_get_thread_num()
 {
   return (unsigned long) omp_get_thread_num();
+}
+
+void adjust_locality(size_t *a, size_t len, size_t run, double locality) {
+    print_sizet(a, len);
+    for (size_t i = 1; i < len / run; i++) {
+        double r = rand() / ((double)RAND_MAX);
+        printf("rand: %lf\n", r);
+        if (r < locality) {
+            size_t *al = a + (i-1)*run;
+            for (size_t j = 0; j < run; j++) {
+                al[j+run] = al[j];
+            }
+            
+        }
+    }
+    
+    print_sizet(a, len);
 }
 
 int main(int argc, char **argv)
@@ -346,6 +364,15 @@ int main(int argc, char **argv)
             printf("Error: pattern files only support scatter and gather kernels\n");
         }
     }
+
+    if (locality > 0) {
+        if (kernel == GATHER) {
+	    adjust_locality(si.host_ptr, si.len, 8, locality);
+        } else if (kernel == SCATTER) {
+	    adjust_locality(ti.host_ptr, ti.len, 8, locality);
+        }
+    }
+
     /* Create buffers on host */
     source.host_ptr = (sgData_t*) sg_safe_cpu_alloc(source.size); 
     target.host_ptr = (sgData_t*) sg_safe_cpu_alloc(target.size); 
