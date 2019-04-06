@@ -145,7 +145,6 @@ unsigned long ul_omp_get_thread_num()
 void adjust_locality(size_t *a, size_t len, size_t run, double locality) {
     for (size_t i = 1; i < len / run; i++) {
         double r = rand() / ((double)RAND_MAX);
-        printf("rand: %lf\n", r);
         if (r < locality) {
             size_t *al = a + (i-1)*run;
             for (size_t j = 0; j < run; j++) {
