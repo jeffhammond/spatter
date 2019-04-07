@@ -94,6 +94,7 @@ void *sg_safe_cpu_alloc (size_t size) {
  */
 void report_time(double time, size_t source_size, size_t target_size, size_t index_size,  size_t vector_len){
     if(backend == OPENMP) printf("OPENMP ");
+    if(backend == SERIAL) printf("SCALAR ");
     if(backend == OPENCL) printf("OPENCL ");
     if(backend == CUDA) printf("CUDA ");
 
