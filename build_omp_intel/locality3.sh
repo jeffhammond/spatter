@@ -10,6 +10,7 @@ for s in 1 2 4 8 16 32 64 128;
 do
 	for loc in 0 .1 .2 .3 .4 .5 .6 .7 .8 .9 1;
 	do
+		echo "Running sparsity $s, locailty $loc"
 		rm -f tmp1.txt tmp2.txt
 		for i in `seq 1 10`; 
 		do 
